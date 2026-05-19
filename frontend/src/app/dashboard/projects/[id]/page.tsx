@@ -408,8 +408,8 @@ export default function BuilderPage() {
   // Which breakdown step is currently active — driven by real streamed file count, not a timer.
   // Each completed file "advances" one step. No step is marked done before a file actually lands.
   const activePart = Math.min(promptParts.length - 1, streamingFiles.length);
-  const stackLabel = project?.stack === "vite-react" ? "Vite" : "Next.js";
-  const StackIcon = project?.stack === "vite-react" ? Zap : Globe;
+  const stackLabel = "HTML";
+  const StackIcon = Globe;
 
   const allFilesForPreview = files.map(f => ({ file_path: f.file_path, content: fileContents[f.file_path] || "" }));
   // During active generation use streamed files so preview updates in real time

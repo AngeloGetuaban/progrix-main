@@ -274,87 +274,61 @@ async def stream_with_fallback(messages: list[dict]) -> AsyncGenerator[str, None
 
 SYSTEM_BASE = """You are an expert web developer AI. Your ONLY output must be a valid JSON object.
 Never output explanations, markdown fences, or any text outside the JSON.
-Optimize for fast first generation: create a compact, complete version that can be refined later.
-Keep output small and high-impact. Prefer one main UI component plus one stylesheet over many tiny files.
-Do not generate README files, tests, lockfiles, placeholder docs, or unnecessary config files unless explicitly requested.
+
+Generate standalone HTML pages with optional CSS and JS files.
+- Use plain HTML, CSS, and vanilla JavaScript only — no frameworks, no build tools, no package managers.
+- Always include Tailwind CSS via CDN: <script src="https://cdn.tailwindcss.com"></script>
+- Keep output compact but complete. One polished page is better than many partial files.
+- Do not generate README, config, or placeholder files.
+- Return index.html first so the preview loads immediately.
 
 JSON format:
 {
   "files": [
-    {"path": "relative/path/file.tsx", "content": "...full file content..."}
+    {"path": "index.html", "content": "...full HTML file..."},
+    {"path": "styles.css", "content": "..."},
+    {"path": "script.js",  "content": "..."}
   ],
-  "summary": "Brief description of what was built or changed",
-  "dependencies": ["package-name", ...]
+  "summary": "Brief description of what was built or changed"
 }"""
 
-STACK_HINTS = {
-    "vite-react": """Stack: Vite + React 18 + TypeScript + shadcn/ui + Tailwind CSS v3.
-- Entry: src/main.tsx → src/App.tsx
-- shadcn imports: from "@/components/ui/*"
-- Use React hooks, functional components only
-- Tailwind class-based styling throughout""",
-
-    "nextjs": """Stack: Next.js 15 App Router + TypeScript + shadcn/ui + Tailwind CSS v4.
-- Pages live in src/app/*/page.tsx
-- Use 'use client' only for interactive components
-- shadcn imports: from "@/components/ui/*"
-- Server components by default""",
-}
-
 PAGE_HINTS = {
-    "landing":     "landing page with hero, features, CTA, footer sections",
-    "blog":        "blog with post list, individual post view, categories sidebar",
-    "promotional": "promotional page with countdown timer, offers, testimonials, CTA",
+    "landing":     "landing page with hero, features, CTA, and footer sections",
+    "blog":        "blog page with article list, featured post, and categories sidebar",
+    "promotional": "promotional page with countdown timer, offers, testimonials, and CTA",
 }
 
 def build_generate_messages(prompt: str, stack: str, page_type: str) -> list[dict]:
-    file_plan = (
-        "For Vite React, generate only these files unless absolutely necessary: "
-        "package.json, index.html, src/main.tsx, src/App.tsx, src/index.css. "
-        "For Next.js, generate only these files unless absolutely necessary: "
-        "package.json, src/app/layout.tsx, src/app/page.tsx, src/app/globals.css."
-    )
     return [
-        {"role": "system", "content": f"{SYSTEM_BASE}\n\n{STACK_HINTS.get(stack, '')}"},
+        {"role": "system", "content": SYSTEM_BASE},
         {"role": "user", "content":
-            f"Build a {PAGE_HINTS.get(page_type, page_type)} website.\n"
+            f"Build a {PAGE_HINTS.get(page_type, page_type)}.\n"
             f"User request: {prompt}\n"
-            f"{file_plan}\n"
-            "Generate a complete, polished first version with concise code. "
-            "Cover the user's requested sections, but keep repeated content data-driven inside the main component. "
-            "Return the largest visual file first so the live preview can appear early."}
+            "Generate index.html as the main file. Add styles.css and script.js only if needed. "
+            "Make it complete, polished, and visually impressive. "
+            "Return index.html first."}
     ]
 
 def build_edit_messages(history: list[dict], current_files: list[dict], edit_prompt: str, stack: str) -> list[dict]:
     if not current_files:
         return build_generate_messages(edit_prompt, stack, "landing")
 
-    target_files = target_source_files(stack)
-    focused_files = [f for f in current_files if (f.get("file_path") or f.get("path")) in target_files]
-    file_context = build_file_context(focused_files or current_files)
-    target_list = ", ".join(target_files)
+    file_context = build_file_context(current_files)
     system = (
-        f"{SYSTEM_BASE}\n\n{STACK_HINTS.get(stack, '')}\n\n"
+        f"{SYSTEM_BASE}\n\n"
         f"Current project files:\n{file_context}\n\n"
-        "For edits, output only files that need to change or be created. "
-        "Return the complete content for every changed file. "
-        f"Target files for this request: {target_list}. "
-        "If the current files are startup scaffold placeholders, replace only those target files. "
-        "Do not rewrite package.json, layout, main entry, or config files. Use inline data arrays and CSS instead of adding dependencies. "
-        "If the user is adding requirements step by step, preserve all existing behavior and layer the new request on top. "
-        "The JSON format is the same but 'files' only contains modified/new files."
+        "For edits, output only the files that need to change. "
+        "Return the complete updated content for every modified file. "
+        "Preserve all existing sections and behavior — only apply the requested changes on top."
     )
     messages = [{"role": "system", "content": system}]
-    # Include last 10 chat turns for context
     for msg in history[-10:]:
         messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": edit_prompt})
     return messages
 
 def target_source_files(stack: str) -> list[str]:
-    if stack == "vite-react":
-        return ["src/App.tsx", "src/index.css"]
-    return ["src/app/page.tsx", "src/app/globals.css"]
+    return ["index.html", "styles.css", "script.js"]
 
 def build_file_context(current_files: list[dict], max_total_chars: int = 50000, max_file_chars: int = 12000) -> str:
     parts: list[str] = []
