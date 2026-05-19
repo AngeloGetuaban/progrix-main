@@ -65,8 +65,8 @@ PROVIDER_BASE = {
 
 GENERATION_TIMEOUT = int(os.getenv("GENERATION_TIMEOUT", "240"))
 QWEN_GENERATION_TIMEOUT = int(os.getenv("QWEN_GENERATION_TIMEOUT", "600"))
-MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "6000"))
-GENERATION_TEMPERATURE = float(os.getenv("GENERATION_TEMPERATURE", "0.2"))
+MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "5500"))
+GENERATION_TEMPERATURE = float(os.getenv("GENERATION_TEMPERATURE", "0.15"))
 
 async def fetch_active_models() -> list[dict]:
     """Healthy models first (by priority), then unhealthy ones as last-resort fallback."""
@@ -279,7 +279,8 @@ Generate standalone HTML pages with optional CSS and JS files.
 - Use plain HTML, CSS, and vanilla JavaScript only — no frameworks, no build tools, no package managers.
 - Always include Tailwind CSS via CDN: <script src="https://cdn.tailwindcss.com"></script>
 - Keep output compact but complete. One polished page is better than many partial files.
-- Do not generate README, config, or placeholder files.
+- Prefer one complete index.html. Add styles.css and script.js only when they materially improve the result.
+- Do not generate README, config, package, lock, TypeScript, JSX, React, Next, Vite, or placeholder files.
 - Return index.html first so the preview loads immediately.
 
 JSON format:
@@ -305,7 +306,7 @@ def build_generate_messages(prompt: str, stack: str, page_type: str) -> list[dic
             f"Build a {PAGE_HINTS.get(page_type, page_type)}.\n"
             f"User request: {prompt}\n"
             "Generate index.html as the main file. Add styles.css and script.js only if needed. "
-            "Make it complete, polished, and visually impressive. "
+            "Make it complete, polished, responsive, and ready to save directly into the database. "
             "Return index.html first."}
     ]
 
@@ -319,7 +320,8 @@ def build_edit_messages(history: list[dict], current_files: list[dict], edit_pro
         f"Current project files:\n{file_context}\n\n"
         "For edits, output only the files that need to change. "
         "Return the complete updated content for every modified file. "
-        "Preserve all existing sections and behavior — only apply the requested changes on top."
+        "Preserve existing sections and behavior unless the user specifically asks to change them. "
+        "Never convert the project to a framework."
     )
     messages = [{"role": "system", "content": system}]
     for msg in history[-10:]:
@@ -330,10 +332,18 @@ def build_edit_messages(history: list[dict], current_files: list[dict], edit_pro
 def target_source_files(stack: str) -> list[str]:
     return ["index.html", "styles.css", "script.js"]
 
-def build_file_context(current_files: list[dict], max_total_chars: int = 50000, max_file_chars: int = 12000) -> str:
+def build_file_context(current_files: list[dict], max_total_chars: int = 28000, max_file_chars: int = 9000) -> str:
     parts: list[str] = []
     used = 0
-    for file in current_files[:30]:
+    priority = {"index.html": 0, "styles.css": 1, "script.js": 2}
+    sorted_files = sorted(
+        current_files,
+        key=lambda f: (
+            priority.get(f.get("file_path") or f.get("path") or "", 10),
+            f.get("file_path") or f.get("path") or "",
+        )
+    )
+    for file in sorted_files[:12]:
         path = file.get("file_path") or file.get("path") or "unknown"
         content = file.get("content") or ""
         if len(content) > max_file_chars:
@@ -373,14 +383,14 @@ def extract_json_object(raw: str) -> dict | None:
 
 class GenerateRequest(BaseModel):
     prompt: str
-    stack: str = "nextjs"          # 'vite-react' | 'nextjs'
+    stack: str = "html"
     page_type: str = "landing"     # 'landing' | 'blog' | 'promotional'
     stream: bool = False
 
 class EditRequest(BaseModel):
     project_id: int
     edit_prompt: str
-    stack: str = "nextjs"
+    stack: str = "html"
     chat_history: list[dict] = []  # [{role, content}]
     current_files: list[dict] = [] # [{file_path, content}]
     stream: bool = False

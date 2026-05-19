@@ -8,7 +8,7 @@ const sql = `
     id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id     INT UNSIGNED NOT NULL,
     name        VARCHAR(255) NOT NULL,
-    stack       ENUM('vite-react','nextjs') NOT NULL DEFAULT 'nextjs',
+    stack       ENUM('html') NOT NULL DEFAULT 'html',
     description TEXT,
     status      ENUM('draft','generating','ready','error') DEFAULT 'draft',
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

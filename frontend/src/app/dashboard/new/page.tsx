@@ -29,7 +29,7 @@ export default function NewProjectPage() {
     if (!name.trim() || !description.trim()) return;
     setLoading(true);
     try {
-      const { data } = await api.post("/projects", { name, stack: "html", description });
+      const { data } = await api.post("/projects", { name, description });
       toast.success("Project created!");
       sessionStorage.setItem("initialPrompt", description);
       sessionStorage.setItem("initialPageType", pageType);

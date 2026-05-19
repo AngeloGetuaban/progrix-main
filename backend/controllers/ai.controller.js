@@ -2,6 +2,9 @@ const pool = require("../database/db");
 const axios = require("axios");
 
 const AI_URL = process.env.PYTHON_AI_URL || "http://localhost:8080";
+const PLAIN_SITE_STACK = "html";
+const SOURCE_FILE_PATTERN = /\.(html|css|js|json|svg|txt)$/i;
+const BLOCKED_FILE_PATTERN = /(^|\/)(package-lock\.json|package\.json|next\.config|vite\.config|tsconfig|node_modules|README)/i;
 
 // ─── POST /api/projects/:id/generate ─────────────────────────────────────────
 exports.generateWebsite = async (req, res) => {
@@ -9,10 +12,8 @@ exports.generateWebsite = async (req, res) => {
   const { prompt, page_type = "landing" } = req.body;
 
   try {
-    // Get project to know the stack
     const [rows] = await pool.execute("SELECT * FROM projects WHERE id=? AND user_id=?", [id, req.user.id]);
     if (!rows.length) return res.status(404).json({ error: "Project not found" });
-    const project = rows[0];
 
     // Mark project as generating
     await pool.execute("UPDATE projects SET status='generating' WHERE id=?", [id]);
@@ -23,22 +24,20 @@ exports.generateWebsite = async (req, res) => {
       [id, "user", prompt]
     );
 
-    const [currentFiles] = await pool.execute(
-      "SELECT file_path, content FROM project_files WHERE project_id=?",
-      [id]
-    );
+    const currentFiles = await _getProjectSourceFiles(id);
+    const chatHistory = currentFiles.length > 0 ? await _getRecentChatHistory(id) : [];
 
     const aiPath = currentFiles.length > 0 ? "edit" : "generate";
     const aiPayload = currentFiles.length > 0
       ? {
           project_id: parseInt(id),
           edit_prompt: prompt,
-          stack: project.stack,
-          chat_history: [],
+          stack: PLAIN_SITE_STACK,
+          chat_history: chatHistory,
           current_files: currentFiles,
           stream: true,
         }
-      : { prompt, stack: project.stack, page_type, stream: true };
+      : { prompt, stack: PLAIN_SITE_STACK, page_type, stream: true };
 
     // Stream mode: proxy SSE
     if (req.query.stream === "true") {
@@ -97,7 +96,7 @@ exports.generateWebsite = async (req, res) => {
     // Non-stream mode
     const aiRes = await axios.post(`${AI_URL}/${aiPath}`, currentFiles.length > 0
       ? { ...aiPayload, stream: false }
-      : { prompt, stack: project.stack, page_type, stream: false }
+      : { prompt, stack: PLAIN_SITE_STACK, page_type, stream: false }
     );
 
     await _saveGeneratedFiles(id, aiRes.data.content, aiRes.data.display_name, aiRes.data.provider);
@@ -117,7 +116,6 @@ exports.editWebsite = async (req, res) => {
   try {
     const [rows] = await pool.execute("SELECT * FROM projects WHERE id=? AND user_id=?", [id, req.user.id]);
     if (!rows.length) return res.status(404).json({ error: "Project not found" });
-    const project = rows[0];
 
     await pool.execute("UPDATE projects SET status='generating' WHERE id=?", [id]);
 
@@ -129,10 +127,7 @@ exports.editWebsite = async (req, res) => {
     const chatHistory = history.reverse();
 
     // Fetch current files
-    const [files] = await pool.execute(
-      "SELECT file_path, content FROM project_files WHERE project_id=?",
-      [id]
-    );
+    const files = await _getProjectSourceFiles(id);
 
     // Save user edit message
     await pool.execute(
@@ -143,7 +138,7 @@ exports.editWebsite = async (req, res) => {
     const payload = {
       project_id: parseInt(id),
       edit_prompt,
-      stack: project.stack,
+      stack: PLAIN_SITE_STACK,
       chat_history: chatHistory,
       current_files: files,
       stream: !!doStream,
@@ -247,6 +242,52 @@ function _parseAIResponse(rawContent) {
   return null;
 }
 
+async function _getProjectSourceFiles(projectId) {
+  const [rows] = await pool.execute(
+    `SELECT file_path, content
+     FROM project_files
+     WHERE project_id=?
+       AND (
+         file_path IN ('index.html', 'styles.css', 'script.js')
+         OR file_path LIKE '%.html'
+         OR file_path LIKE '%.css'
+         OR file_path LIKE '%.js'
+         OR file_path LIKE '%.json'
+         OR file_path LIKE '%.svg'
+         OR file_path LIKE '%.txt'
+       )
+     ORDER BY
+       CASE
+         WHEN file_path = 'index.html' THEN 0
+         WHEN file_path LIKE '%.html' THEN 1
+         WHEN file_path LIKE '%.css' THEN 2
+         WHEN file_path LIKE '%.js' THEN 3
+         ELSE 4
+       END,
+       file_path
+     LIMIT 20`,
+    [projectId]
+  );
+
+  return rows.filter((file) => _isAllowedProjectFile(file.file_path));
+}
+
+async function _getRecentChatHistory(projectId) {
+  const [history] = await pool.execute(
+    "SELECT role, content FROM chat_messages WHERE project_id=? ORDER BY created_at DESC LIMIT 10",
+    [projectId]
+  );
+  return history.reverse();
+}
+
+function _isAllowedProjectFile(filePath) {
+  if (!filePath || typeof filePath !== "string") return false;
+  const normalized = filePath.replace(/\\/g, "/");
+  if (normalized.includes("..")) return false;
+  if (BLOCKED_FILE_PATTERN.test(normalized)) return false;
+  return SOURCE_FILE_PATTERN.test(normalized);
+}
+
 async function _saveGeneratedFiles(projectId, rawContent, modelUsed, provider) {
   const parsed = _parseAIResponse(rawContent);
 
@@ -260,19 +301,31 @@ async function _saveGeneratedFiles(projectId, rawContent, modelUsed, provider) {
     return;
   }
 
-  const files = parsed.files || [];
+  const files = (parsed.files || [])
+    .map((file) => ({
+      filePath: file.path || file.file_path || file.filename,
+      content: file.content || file.code || "",
+    }))
+    .filter((file) => _isAllowedProjectFile(file.filePath));
+
+  if (!files.length) {
+    await _markProjectError(
+      projectId,
+      "AI response did not include any valid plain HTML/CSS/JS files.",
+      modelUsed,
+      provider
+    );
+    return;
+  }
+
   console.log(`[AI] Saving ${files.length} files for project ${projectId}`);
 
   for (const file of files) {
-    // Support both file.path and file.file_path
-    const filePath = file.path || file.file_path || file.filename;
-    const content  = file.content || file.code || "";
-    if (!filePath) { console.warn("[AI] Skipping file with no path:", file); continue; }
     await pool.execute(
       `INSERT INTO project_files (project_id, file_path, content)
        VALUES (?,?,?)
        ON DUPLICATE KEY UPDATE content=VALUES(content), updated_at=NOW()`,
-      [projectId, filePath, content]
+      [projectId, file.filePath, file.content]
     );
   }
 
@@ -281,7 +334,7 @@ async function _saveGeneratedFiles(projectId, rawContent, modelUsed, provider) {
     "INSERT INTO chat_messages (project_id, role, content, model_used, provider) VALUES (?,?,?,?,?)",
     [projectId, "assistant", summary, modelUsed, provider]
   );
-  await pool.execute("UPDATE projects SET status='ready' WHERE id=?", [projectId]);
+  await pool.execute("UPDATE projects SET status='ready', stack=? WHERE id=?", [PLAIN_SITE_STACK, projectId]);
   console.log(`[AI] Project ${projectId} saved successfully — ${files.length} files, status=ready`);
 }
 

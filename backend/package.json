@@ -7,7 +7,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon server.js",
     "start": "node server.js",
-    "migrate": "node migration/001_create_users.js && node migration/002_create_projects.js && node migration/003_create_project_files.js && node migration/004_create_chat_messages.js && node migration/005_create_ai_models.js"
+    "migrate": "node migration/001_create_users.js && node migration/002_create_projects.js && node migration/003_create_project_files.js && node migration/004_create_chat_messages.js && node migration/005_create_ai_models.js && node migration/006_force_html_projects.js"
   },
   "keywords": [],
   "author": "",

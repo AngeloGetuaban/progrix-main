@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
-  Plus, Sparkles, LogOut, Zap, Globe, LayoutTemplate,
+  Plus, Sparkles, LogOut, Globe, LayoutTemplate,
   Clock, Trash2, ArrowRight, Bot
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import { getUser, clearAuth } from "@/lib/auth";
 interface Project {
   id: number;
   name: string;
-  stack: "vite-react" | "nextjs";
+  stack: "html";
   description: string;
   status: "draft" | "generating" | "ready" | "error";
   created_at: string;
@@ -30,8 +30,7 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 const STACK_ICON: Record<string, React.ReactNode> = {
-  "vite-react": <Zap className="w-3.5 h-3.5" />,
-  "nextjs":     <Globe className="w-3.5 h-3.5" />,
+  html: <Globe className="w-3.5 h-3.5" />,
 };
 
 export default function DashboardPage() {
@@ -112,7 +111,7 @@ export default function DashboardPage() {
             <h1 className="text-3xl font-bold text-white">
               Your Projects
             </h1>
-            <p className="text-white/40 mt-1 text-sm">Build websites with AI — describe, generate, iterate.</p>
+            <p className="text-white/40 mt-1 text-sm">Build HTML websites with AI — describe, generate, iterate.</p>
           </div>
           <Button
             onClick={() => router.push("/dashboard/new")}
@@ -180,7 +179,7 @@ export default function DashboardPage() {
                     </Badge>
                     <Badge variant="outline" className="text-xs gap-1 bg-white/5 text-white/40 border-white/10">
                       {STACK_ICON[p.stack]}
-                      {p.stack === "vite-react" ? "Vite" : "Next.js"}
+                      HTML
                     </Badge>
                   </div>
                   <div className="flex items-center gap-1 text-xs text-white/30">

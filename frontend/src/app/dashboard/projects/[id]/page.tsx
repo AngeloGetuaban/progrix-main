@@ -113,9 +113,6 @@ function CodeView({ code, lang }: { code: string; lang: string }) {
 function PreviewFrame({ files }: { files: { file_path: string; content: string }[] }) {
   const getIndexFile = () => {
     return files.find(f => f.file_path.endsWith("index.html")) ||
-           files.find(f => f.file_path.endsWith("page.tsx")) ||
-           files.find(f => f.file_path.endsWith("index.tsx") || f.file_path.endsWith("index.jsx")) ||
-           files.find(f => f.file_path.endsWith("App.tsx") || f.file_path.endsWith("App.jsx")) ||
            files[0];
   };
 
@@ -167,8 +164,8 @@ function PreviewFrame({ files }: { files: { file_path: string; content: string }
 <body class="bg-gray-900 text-white p-6">
 <div class="max-w-4xl mx-auto">
   <div class="glass rounded-xl p-6 text-center mb-4" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1)">
-    <p class="text-purple-400 text-sm font-medium mb-2">📦 Code Preview Mode</p>
-    <p class="text-white/60 text-xs">React/Next.js components render in the code view. Download the project to run locally.</p>
+    <p class="text-purple-400 text-sm font-medium mb-2">Code Preview Mode</p>
+    <p class="text-white/60 text-xs">This file is shown as source because it is not an HTML document.</p>
   </div>
   <pre style="background:#0d0d1a;border:1px solid #1e1e3a;border-radius:8px;padding:16px;font-size:12px;color:#86efac;overflow:auto;max-height:70vh;white-space:pre-wrap;">${mainContent.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
 </div>
@@ -300,13 +297,9 @@ export default function BuilderPage() {
     addUserMessage(text);
     try {
       const hasExistingFiles = files.length > 0;
-      const allFiles = await Promise.all(files.map(async (f) => {
-        const content = fileContents[f.file_path] || "";
-        return { file_path: f.file_path, content };
-      }));
       const endpoint = hasExistingFiles ? "edit" : "generate";
       const body = hasExistingFiles
-        ? { edit_prompt: text, stream: true, current_files: allFiles }
+        ? { edit_prompt: text, stream: true }
         : { prompt: text, page_type: "landing" };
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects/${id}/${endpoint}?stream=true`, {
         method: "POST",
