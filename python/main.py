@@ -299,28 +299,94 @@ PAGE_HINTS = {
     "promotional": "promotional page with countdown timer, offers, testimonials, and CTA",
 }
 
-def build_generate_messages(prompt: str, stack: str, page_type: str) -> list[dict]:
+PLAN_SYSTEM = """You are a senior website strategist and visual design director.
+Your ONLY output must be a valid JSON object. Do not use markdown fences.
+
+Turn the user's prompt into a premium website design brief for an AI website builder.
+Prefer current, polished website-builder output: strong hero, clear positioning, refined sections, realistic copy, responsive layout, and coherent visual language.
+
+JSON format:
+{
+  "business_type": "short category",
+  "audience": "primary audience",
+  "primary_goal": "main conversion goal",
+  "tone": "3-6 adjectives",
+  "archetype": "clinic|restaurant|saas|portfolio|agency|ecommerce|real_estate|event|education|local_service|general",
+  "visual_direction": "specific design direction",
+  "palette": {
+    "primary": "#hex",
+    "secondary": "#hex",
+    "accent": "#hex",
+    "background": "#hex",
+    "text": "#hex"
+  },
+  "typography": {
+    "heading": "font style description",
+    "body": "font style description"
+  },
+  "sections": [
+    {"id": "hero", "goal": "...", "content_notes": "...", "visual_notes": "..."}
+  ],
+  "cta": {
+    "primary": "button text",
+    "secondary": "optional button text"
+  },
+  "trust_elements": ["..."],
+  "interactive_elements": ["..."],
+  "content_strategy": "copy guidance",
+  "quality_bar": ["..."]
+}"""
+
+def build_plan_messages(prompt: str, page_type: str) -> list[dict]:
+    return [
+        {"role": "system", "content": PLAN_SYSTEM},
+        {"role": "user", "content":
+            f"Page type: {page_type}\n"
+            f"User request: {prompt}\n"
+            "Create a practical design brief that will lead to a visually rich, modern, conversion-focused website. "
+            "Use specific sections, realistic content direction, and a coherent color palette."}
+    ]
+
+def brief_context(design_brief: dict | None) -> str:
+    if not design_brief:
+        return "No saved design brief yet."
+    return json.dumps(design_brief, ensure_ascii=False, indent=2)
+
+def build_generate_messages(prompt: str, stack: str, page_type: str, design_brief: dict | None = None) -> list[dict]:
+    brief = brief_context(design_brief)
     return [
         {"role": "system", "content": SYSTEM_BASE},
         {"role": "user", "content":
             f"Build a {PAGE_HINTS.get(page_type, page_type)}.\n"
             f"User request: {prompt}\n"
-            "Generate index.html as the main file. Add styles.css and script.js only if needed. "
-            "Make it complete, polished, responsive, and ready to save directly into the database. "
+            f"Saved design brief to follow:\n{brief}\n\n"
+            "Generate a premium, modern website-builder-quality result. It must feel intentionally designed, not like a basic HTML sample.\n"
+            "Requirements:\n"
+            "- Use a distinctive hero with headline, subcopy, primary CTA, secondary CTA or trust cue.\n"
+            "- Include at least 5 polished sections for landing pages unless the brief says otherwise.\n"
+            "- Use responsive grids, strong spacing, cards, badges, subtle shadows, and a coherent palette from the brief.\n"
+            "- Write realistic, specific marketing copy based on the business type.\n"
+            "- Use inline SVG icons or CSS shapes where useful; do not depend on icon libraries.\n"
+            "- Always load Tailwind with <script src=\"https://cdn.tailwindcss.com\"></script>, never as a stylesheet link.\n"
+            "- Generate index.html as the main file. Add styles.css and script.js only if needed.\n"
             "Return index.html first."}
     ]
 
-def build_edit_messages(history: list[dict], current_files: list[dict], edit_prompt: str, stack: str) -> list[dict]:
+def build_edit_messages(history: list[dict], current_files: list[dict], edit_prompt: str, stack: str, design_brief: dict | None = None) -> list[dict]:
     if not current_files:
-        return build_generate_messages(edit_prompt, stack, "landing")
+        return build_generate_messages(edit_prompt, stack, "landing", design_brief)
 
     file_context = build_file_context(current_files)
+    brief = brief_context(design_brief)
     system = (
         f"{SYSTEM_BASE}\n\n"
+        f"Saved design brief:\n{brief}\n\n"
         f"Current project files:\n{file_context}\n\n"
         "For edits, output only the files that need to change. "
         "Return the complete updated content for every modified file. "
         "Preserve existing sections and behavior unless the user specifically asks to change them. "
+        "Keep the visual direction, palette, section rhythm, and conversion strategy aligned with the saved design brief. "
+        "If the edit request changes strategy, evolve the design while preserving quality. "
         "Never convert the project to a framework."
     )
     messages = [{"role": "system", "content": system}]
@@ -381,10 +447,44 @@ def extract_json_object(raw: str) -> dict | None:
 
 # ─── Request schemas ─────────────────────────────────────────────────────────
 
+def fallback_design_brief(prompt: str, page_type: str) -> dict:
+    return {
+        "business_type": "general",
+        "audience": "prospective customers",
+        "primary_goal": "encourage visitors to take action",
+        "tone": "modern, clear, trustworthy, polished",
+        "archetype": "general",
+        "visual_direction": "premium responsive landing page with strong hierarchy, generous spacing, and polished cards",
+        "palette": {
+            "primary": "#2563eb",
+            "secondary": "#0f172a",
+            "accent": "#38bdf8",
+            "background": "#f8fafc",
+            "text": "#0f172a",
+        },
+        "typography": {
+            "heading": "bold geometric sans-serif",
+            "body": "clean readable sans-serif",
+        },
+        "sections": [
+            {"id": "hero", "goal": "state the value proposition", "content_notes": prompt, "visual_notes": "strong CTA and trust cue"},
+            {"id": "features", "goal": "show key benefits", "content_notes": "3-4 benefit cards", "visual_notes": "responsive card grid"},
+            {"id": "social-proof", "goal": "build trust", "content_notes": "testimonials or stats", "visual_notes": "contrast band"},
+            {"id": "process", "goal": "explain how it works", "content_notes": "simple steps", "visual_notes": "numbered layout"},
+            {"id": "contact", "goal": "convert", "content_notes": "clear call to action", "visual_notes": "prominent CTA panel"},
+        ],
+        "cta": {"primary": "Get Started", "secondary": "Learn More"},
+        "trust_elements": ["customer-friendly copy", "clear benefits", "professional presentation"],
+        "interactive_elements": ["smooth anchor navigation", "CTA hover states"],
+        "content_strategy": f"Use the user's request as the core content direction for a {page_type} page.",
+        "quality_bar": ["responsive", "visually rich", "complete sections", "specific copy", "no framework"],
+    }
+
 class GenerateRequest(BaseModel):
     prompt: str
     stack: str = "html"
     page_type: str = "landing"     # 'landing' | 'blog' | 'promotional'
+    design_brief: dict | None = None
     stream: bool = False
 
 class EditRequest(BaseModel):
@@ -393,7 +493,12 @@ class EditRequest(BaseModel):
     stack: str = "html"
     chat_history: list[dict] = []  # [{role, content}]
     current_files: list[dict] = [] # [{file_path, content}]
+    design_brief: dict | None = None
     stream: bool = False
+
+class PlanRequest(BaseModel):
+    prompt: str
+    page_type: str = "landing"
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
 
@@ -443,9 +548,17 @@ async def force_health_check(model_id: int):
         await mark_model_health(model_id, False)
         return {"id": model_id, "healthy": False, "error": str(e)}
 
+@app.post("/plan")
+async def plan(req: PlanRequest):
+    result = await generate_with_fallback(build_plan_messages(req.prompt, req.page_type))
+    parsed = extract_json_object(result["content"])
+    if not parsed:
+        parsed = fallback_design_brief(req.prompt, req.page_type)
+    return {**result, "data": parsed}
+
 @app.post("/generate")
 async def generate(req: GenerateRequest):
-    messages = build_generate_messages(req.prompt, req.stack, req.page_type)
+    messages = build_generate_messages(req.prompt, req.stack, req.page_type, req.design_brief)
     if req.stream:
         return StreamingResponse(
             stream_with_fallback(messages),
@@ -460,7 +573,7 @@ async def generate(req: GenerateRequest):
 @app.post("/edit")
 async def edit(req: EditRequest):
     messages = build_edit_messages(
-        req.chat_history, req.current_files, req.edit_prompt, req.stack
+        req.chat_history, req.current_files, req.edit_prompt, req.stack, req.design_brief
     )
     if req.stream:
         return StreamingResponse(

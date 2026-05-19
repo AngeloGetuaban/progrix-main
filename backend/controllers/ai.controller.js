@@ -26,6 +26,9 @@ exports.generateWebsite = async (req, res) => {
 
     const currentFiles = await _getProjectSourceFiles(id);
     const chatHistory = currentFiles.length > 0 ? await _getRecentChatHistory(id) : [];
+    const designBrief = currentFiles.length > 0
+      ? await _getLatestProjectPlan(id)
+      : await _createAndSaveProjectPlan(id, prompt, page_type, "initial");
 
     const aiPath = currentFiles.length > 0 ? "edit" : "generate";
     const aiPayload = currentFiles.length > 0
@@ -33,17 +36,21 @@ exports.generateWebsite = async (req, res) => {
           project_id: parseInt(id),
           edit_prompt: prompt,
           stack: PLAIN_SITE_STACK,
+          design_brief: designBrief,
           chat_history: chatHistory,
           current_files: currentFiles,
           stream: true,
         }
-      : { prompt, stack: PLAIN_SITE_STACK, page_type, stream: true };
+      : { prompt, stack: PLAIN_SITE_STACK, page_type, design_brief: designBrief, stream: true };
 
     // Stream mode: proxy SSE
     if (req.query.stream === "true") {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("X-Accel-Buffering", "no");
+      if (designBrief) {
+        res.write(`data: ${JSON.stringify({ type: "plan", plan: designBrief })}\n\n`);
+      }
 
       const aiRes = await axios.post(
         `${AI_URL}/${aiPath}?stream=true`,
@@ -96,7 +103,7 @@ exports.generateWebsite = async (req, res) => {
     // Non-stream mode
     const aiRes = await axios.post(`${AI_URL}/${aiPath}`, currentFiles.length > 0
       ? { ...aiPayload, stream: false }
-      : { prompt, stack: PLAIN_SITE_STACK, page_type, stream: false }
+      : { prompt, stack: PLAIN_SITE_STACK, page_type, design_brief: designBrief, stream: false }
     );
 
     await _saveGeneratedFiles(id, aiRes.data.content, aiRes.data.display_name, aiRes.data.provider);
@@ -139,6 +146,7 @@ exports.editWebsite = async (req, res) => {
       project_id: parseInt(id),
       edit_prompt,
       stack: PLAIN_SITE_STACK,
+      design_brief: await _getLatestProjectPlan(id),
       chat_history: chatHistory,
       current_files: files,
       stream: !!doStream,
@@ -242,6 +250,104 @@ function _parseAIResponse(rawContent) {
   return null;
 }
 
+async function _createAndSaveProjectPlan(projectId, prompt, pageType, source = "initial") {
+  try {
+    const aiRes = await axios.post(
+      `${AI_URL}/plan`,
+      { prompt, page_type: pageType },
+      { timeout: 120000, maxBodyLength: Infinity, maxContentLength: Infinity }
+    );
+    const plan = aiRes.data.data || _fallbackProjectPlan(prompt, pageType);
+    await _saveProjectPlan(
+      projectId,
+      source,
+      pageType,
+      prompt,
+      plan,
+      aiRes.data.display_name,
+      aiRes.data.provider
+    );
+    return plan;
+  } catch (err) {
+    const plan = _fallbackProjectPlan(prompt, pageType);
+    await _saveProjectPlan(projectId, source, pageType, prompt, plan, null, null);
+    return plan;
+  }
+}
+
+async function _saveProjectPlan(projectId, source, pageType, prompt, plan, modelUsed, provider) {
+  await pool.execute(
+    `INSERT INTO project_ai_plans
+      (project_id, source, page_type, prompt, plan_json, summary, model_used, provider)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [
+      projectId,
+      source,
+      pageType || "landing",
+      prompt || "",
+      JSON.stringify(plan),
+      _summarizeProjectPlan(plan),
+      modelUsed,
+      provider,
+    ]
+  );
+}
+
+async function _getLatestProjectPlan(projectId) {
+  const [rows] = await pool.execute(
+    "SELECT plan_json FROM project_ai_plans WHERE project_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+    [projectId]
+  );
+  if (!rows.length) return null;
+  try {
+    return JSON.parse(rows[0].plan_json);
+  } catch {
+    return null;
+  }
+}
+
+function _summarizeProjectPlan(plan) {
+  if (!plan || typeof plan !== "object") return null;
+  const type = plan.business_type || plan.archetype || "website";
+  const goal = plan.primary_goal || "conversion";
+  const sectionCount = Array.isArray(plan.sections) ? plan.sections.length : 0;
+  return `${type} plan focused on ${goal}${sectionCount ? ` with ${sectionCount} sections` : ""}`;
+}
+
+function _fallbackProjectPlan(prompt, pageType) {
+  return {
+    business_type: "general",
+    audience: "prospective customers",
+    primary_goal: "encourage visitors to take action",
+    tone: "modern, clear, trustworthy, polished",
+    archetype: pageType || "general",
+    visual_direction: "premium responsive landing page with strong hierarchy, generous spacing, polished cards, and a clear conversion path",
+    palette: {
+      primary: "#2563eb",
+      secondary: "#0f172a",
+      accent: "#38bdf8",
+      background: "#f8fafc",
+      text: "#0f172a",
+    },
+    typography: {
+      heading: "bold geometric sans-serif",
+      body: "clean readable sans-serif",
+    },
+    sections: [
+      { id: "hero", goal: "state the value proposition", content_notes: prompt, visual_notes: "large headline, CTA, trust cue" },
+      { id: "features", goal: "show key benefits", content_notes: "3-4 benefit cards", visual_notes: "responsive grid" },
+      { id: "social-proof", goal: "build trust", content_notes: "testimonials or stats", visual_notes: "contrast section" },
+      { id: "process", goal: "explain how it works", content_notes: "simple steps", visual_notes: "numbered layout" },
+      { id: "contact", goal: "convert", content_notes: "clear call to action", visual_notes: "prominent CTA panel" },
+    ],
+    cta: { primary: "Get Started", secondary: "Learn More" },
+    trust_elements: ["specific benefits", "professional presentation", "clear contact path"],
+    interactive_elements: ["CTA hover states", "smooth anchor links"],
+    content_strategy: `Use the user request as the core direction: ${prompt}`,
+    quality_bar: ["responsive", "visually rich", "complete sections", "specific copy", "no framework"],
+  };
+}
+
 async function _getProjectSourceFiles(projectId) {
   const [rows] = await pool.execute(
     `SELECT file_path, content
@@ -319,13 +425,14 @@ async function _saveGeneratedFiles(projectId, rawContent, modelUsed, provider) {
   }
 
   console.log(`[AI] Saving ${files.length} files for project ${projectId}`);
+  const filePaths = new Set(files.map((file) => file.filePath));
 
   for (const file of files) {
     await pool.execute(
       `INSERT INTO project_files (project_id, file_path, content)
        VALUES (?,?,?)
        ON DUPLICATE KEY UPDATE content=VALUES(content), updated_at=NOW()`,
-      [projectId, file.filePath, file.content]
+      [projectId, file.filePath, _normalizeGeneratedContent(file.filePath, file.content, filePaths)]
     );
   }
 
@@ -348,4 +455,34 @@ async function _markProjectError(projectId, message, modelUsed, provider) {
     "INSERT INTO chat_messages (project_id, role, content, model_used, provider) VALUES (?,?,?,?,?)",
     [projectId, "assistant", `Error: ${message}`, modelUsed, provider]
   );
+}
+
+function _normalizeGeneratedContent(filePath, content, filePaths) {
+  if (!filePath.toLowerCase().endsWith(".html")) return content;
+
+  let html = String(content || "");
+  html = html.replace(/<link\b[^>]*href=["']https:\/\/cdn\.tailwindcss\.com\/?["'][^>]*>/gi, "");
+
+  const hasTailwindScript = /<script\b[^>]*src=["']https:\/\/cdn\.tailwindcss\.com\/?["'][^>]*>/i.test(html);
+  if (!hasTailwindScript) {
+    html = _insertBeforeCloseTag(html, "head", '<script src="https://cdn.tailwindcss.com"></script>');
+  }
+
+  html = html.replace(
+    /<style\b([^>]*?)src=["']([^"']+\.css)["']([^>]*?)>\s*<\/style>/gi,
+    (tag, before, src, after) => {
+      const normalized = src.replace(/^\.?\//, "");
+      return filePaths.has(normalized)
+        ? `<link rel="stylesheet" href="${normalized}">`
+        : "";
+    }
+  );
+
+  return html;
+}
+
+function _insertBeforeCloseTag(html, tag, content) {
+  const closeTag = new RegExp(`</${tag}>`, "i");
+  if (closeTag.test(html)) return html.replace(closeTag, `${content}</${tag}>`);
+  return tag === "head" ? `${content}${html}` : `${html}${content}`;
 }

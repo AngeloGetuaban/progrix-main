@@ -110,6 +110,177 @@ function CodeView({ code, lang }: { code: string; lang: string }) {
 }
 
 // ─── Preview iframe ──────────────────────────────────────────────────────
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function escapeCssClass(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
+}
+
+function insertBeforeCloseTag(html: string, tag: "head" | "body", content: string): string {
+  const closeTag = new RegExp(`</${tag}>`, "i");
+  if (closeTag.test(html)) return html.replace(closeTag, `${content}</${tag}>`);
+  return tag === "head" ? `${content}${html}` : `${html}${content}`;
+}
+
+function normalizeAssetPath(path: string): string {
+  return path.replace(/^\.?\//, "").replace(/\\/g, "/");
+}
+
+function inlineReferencedAssets(html: string, files: { file_path: string; content: string }[]): string {
+  const byPath = new Map(files.map((file) => [file.file_path.replace(/\\/g, "/"), file.content || ""]));
+
+  let output = html.replace(
+    /<link\b([^>]*?)href=["']([^"']+\.css)["']([^>]*?)>/gi,
+    (tag, before, href) => {
+      const content = byPath.get(normalizeAssetPath(href));
+      return content === undefined ? tag : `<style data-inline-from="${href}">\n${content}\n</style>`;
+    }
+  );
+
+  output = output.replace(
+    /<style\b([^>]*?)src=["']([^"']+\.css)["']([^>]*?)>\s*<\/style>/gi,
+    (tag, before, src) => {
+      const content = byPath.get(normalizeAssetPath(src));
+      return content === undefined ? tag : `<style data-inline-from="${src}">\n${content}\n</style>`;
+    }
+  );
+
+  output = output.replace(
+    /<script\b([^>]*?)src=["']([^"']+\.js)["']([^>]*?)>\s*<\/script>/gi,
+    (tag, before, src) => {
+      const content = byPath.get(normalizeAssetPath(src));
+      return content === undefined ? tag : `<script data-inline-from="${src}">\n${content}\n</script>`;
+    }
+  );
+
+  return output;
+}
+
+function ensureTailwindScript(html: string): string {
+  let output = html.replace(
+    /<link\b[^>]*href=["']https:\/\/cdn\.tailwindcss\.com["'][^>]*>/gi,
+    ""
+  );
+  output = output.replace(
+    /<link\b[^>]*href=["']https:\/\/cdn\.tailwindcss\.com\/?["'][^>]*>/gi,
+    ""
+  );
+
+  const hasTailwindScript = /<script\b[^>]*src=["']https:\/\/cdn\.tailwindcss\.com\/?["'][^>]*>/i.test(output);
+  if (hasTailwindScript) return output;
+  return insertBeforeCloseTag(output, "head", `<script src="https://cdn.tailwindcss.com"></script>`);
+}
+
+function buildUtilityFallbackCss(html: string): string {
+  const classes = new Set<string>();
+  const classRegex = /class=["']([^"']+)["']/gi;
+  let match: RegExpExecArray | null;
+  while ((match = classRegex.exec(html)) !== null) {
+    match[1].split(/\s+/).filter(Boolean).forEach((name) => classes.add(name));
+  }
+
+  const spacing: Record<string, string> = {
+    "0": "0", "1": "0.25rem", "2": "0.5rem", "3": "0.75rem", "4": "1rem", "5": "1.25rem",
+    "6": "1.5rem", "8": "2rem", "10": "2.5rem", "12": "3rem", "16": "4rem", "20": "5rem",
+    "24": "6rem",
+  };
+  const colors: Record<string, Record<string, string>> = {
+    white: { DEFAULT: "#ffffff" },
+    black: { DEFAULT: "#000000" },
+    blue: { "50": "#eff6ff", "100": "#dbeafe", "500": "#3b82f6", "600": "#2563eb", "700": "#1d4ed8" },
+    gray: { "50": "#f9fafb", "100": "#f3f4f6", "500": "#6b7280", "700": "#374151", "900": "#111827" },
+    slate: { "50": "#f8fafc", "100": "#f1f5f9", "700": "#334155", "900": "#0f172a" },
+    purple: { "500": "#a855f7", "600": "#9333ea", "700": "#7e22ce" },
+    emerald: { "400": "#34d399", "500": "#10b981", "600": "#059669" },
+    red: { "500": "#ef4444", "600": "#dc2626" },
+    yellow: { "400": "#facc15", "500": "#eab308" },
+  };
+  const colorValue = (name: string) => {
+    const [family, shade = "DEFAULT"] = name.split("-");
+    return colors[family]?.[shade] || colors[family]?.DEFAULT;
+  };
+
+  const rules: string[] = [
+    "*,::before,::after{box-sizing:border-box}",
+    "body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.5}",
+    "img,svg,video,canvas{display:block;max-width:100%}",
+    "button{font:inherit;cursor:pointer}",
+  ];
+
+  for (const name of classes) {
+    const base = name.replace(/^hover:/, "");
+    const selector = name.startsWith("hover:") ? `.${escapeCssClass(name)}:hover` : `.${escapeCssClass(name)}`;
+    const add = (body: string) => { if (body) rules.push(`${selector}{${body}}`); };
+
+    if (base === "flex") add("display:flex");
+    else if (base === "grid") add("display:grid");
+    else if (base === "block") add("display:block");
+    else if (base === "inline-block") add("display:inline-block");
+    else if (base === "hidden") add("display:none");
+    else if (base === "items-center") add("align-items:center");
+    else if (base === "justify-center") add("justify-content:center");
+    else if (base === "justify-between") add("justify-content:space-between");
+    else if (base === "text-center") add("text-align:center");
+    else if (base === "font-bold") add("font-weight:700");
+    else if (base === "font-semibold") add("font-weight:600");
+    else if (base === "font-medium") add("font-weight:500");
+    else if (base === "rounded") add("border-radius:0.25rem");
+    else if (base === "rounded-lg") add("border-radius:0.5rem");
+    else if (base === "rounded-xl") add("border-radius:0.75rem");
+    else if (base === "rounded-2xl") add("border-radius:1rem");
+    else if (base === "list-none") add("list-style:none");
+    else if (base === "mx-auto") add("margin-left:auto;margin-right:auto");
+    else if (base === "min-h-screen") add("min-height:100vh");
+    else if (base === "w-full") add("width:100%");
+    else if (base === "h-full") add("height:100%");
+    else if (base === "max-w-4xl") add("max-width:56rem");
+    else if (base === "max-w-6xl") add("max-width:72rem");
+    else if (base === "text-xs") add("font-size:0.75rem;line-height:1rem");
+    else if (base === "text-sm") add("font-size:0.875rem;line-height:1.25rem");
+    else if (base === "text-lg") add("font-size:1.125rem;line-height:1.75rem");
+    else if (base === "text-xl") add("font-size:1.25rem;line-height:1.75rem");
+    else if (base === "text-2xl") add("font-size:1.5rem;line-height:2rem");
+    else if (base === "text-3xl") add("font-size:1.875rem;line-height:2.25rem");
+    else if (base === "text-4xl") add("font-size:2.25rem;line-height:2.5rem");
+    else if (base === "text-5xl") add("font-size:3rem;line-height:1");
+    else if (base === "leading-normal") add("line-height:1.5");
+    else if (base === "tracking-wide") add("letter-spacing:0.025em");
+    else if (/^(p|m|px|py|pt|pr|pb|pl|mt|mr|mb|ml)-/.test(base)) {
+      const [, prop, size] = base.match(/^(p|m|px|py|pt|pr|pb|pl|mt|mr|mb|ml)-(.+)$/) || [];
+      const value = spacing[size];
+      if (!value) continue;
+      const property = prop.startsWith("m") ? "margin" : "padding";
+      const side = prop.slice(1);
+      const map: Record<string, string> = {
+        x: `${property}-left:${value};${property}-right:${value}`,
+        y: `${property}-top:${value};${property}-bottom:${value}`,
+        t: `${property}-top:${value}`,
+        r: `${property}-right:${value}`,
+        b: `${property}-bottom:${value}`,
+        l: `${property}-left:${value}`,
+        "": `${property}:${value}`,
+      };
+      add(map[side] || "");
+    } else if (base.startsWith("bg-")) {
+      const color = colorValue(base.slice(3));
+      if (color) add(`background-color:${color}`);
+    } else if (base.startsWith("text-")) {
+      const color = colorValue(base.slice(5));
+      if (color) add(`color:${color}`);
+    } else if (base.startsWith("border-")) {
+      const color = colorValue(base.slice(7));
+      if (color) add(`border-color:${color}`);
+    }
+  }
+
+  return rules.join("\n");
+}
+
 function PreviewFrame({ files }: { files: { file_path: string; content: string }[] }) {
   const getIndexFile = () => {
     return files.find(f => f.file_path.endsWith("index.html")) ||
@@ -141,17 +312,11 @@ function PreviewFrame({ files }: { files: { file_path: string; content: string }
 
   let srcDoc = "";
   if (isHtml) {
-    srcDoc = mainContent;
-    if (cssContent) {
-      if (srcDoc.includes("</head>")) {
-        srcDoc = srcDoc.replace("</head>", `<style>${cssContent}</style></head>`);
-      } else {
-        srcDoc = `<style>${cssContent}</style>` + srcDoc;
-      }
-    }
-    if (!srcDoc.includes("tailwindcss")) {
-      srcDoc = srcDoc.replace("</head>", `<script src="https://cdn.tailwindcss.com"></script></head>`);
-    }
+    srcDoc = inlineReferencedAssets(mainContent, files);
+    const fallbackCss = buildUtilityFallbackCss(srcDoc);
+    srcDoc = insertBeforeCloseTag(srcDoc, "head", `<style data-preview-fallback>\n${fallbackCss}\n</style>`);
+    if (cssContent) srcDoc = insertBeforeCloseTag(srcDoc, "head", `<style data-project-css>\n${cssContent}\n</style>`);
+    srcDoc = ensureTailwindScript(srcDoc);
   } else {
     srcDoc = `<!DOCTYPE html>
 <html>
@@ -167,7 +332,7 @@ function PreviewFrame({ files }: { files: { file_path: string; content: string }
     <p class="text-purple-400 text-sm font-medium mb-2">Code Preview Mode</p>
     <p class="text-white/60 text-xs">This file is shown as source because it is not an HTML document.</p>
   </div>
-  <pre style="background:#0d0d1a;border:1px solid #1e1e3a;border-radius:8px;padding:16px;font-size:12px;color:#86efac;overflow:auto;max-height:70vh;white-space:pre-wrap;">${mainContent.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
+  <pre style="background:#0d0d1a;border:1px solid #1e1e3a;border-radius:8px;padding:16px;font-size:12px;color:#86efac;overflow:auto;max-height:70vh;white-space:pre-wrap;">${escapeHtml(mainContent)}</pre>
 </div>
 </body></html>`;
   }
