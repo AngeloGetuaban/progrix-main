@@ -14,6 +14,7 @@ from typing import AsyncGenerator
 import aiomysql
 import litellm
 from fastapi import FastAPI, HTTPException
+from components import get_components_for_page
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -354,12 +355,15 @@ def brief_context(design_brief: dict | None) -> str:
 
 def build_generate_messages(prompt: str, stack: str, page_type: str, design_brief: dict | None = None) -> list[dict]:
     brief = brief_context(design_brief)
+    section_ids = [s.get("id", "") for s in (design_brief or {}).get("sections", [])]
+    components = get_components_for_page(page_type, section_ids)
     return [
         {"role": "system", "content": SYSTEM_BASE},
         {"role": "user", "content":
             f"Build a {PAGE_HINTS.get(page_type, page_type)}.\n"
             f"User request: {prompt}\n"
             f"Saved design brief to follow:\n{brief}\n\n"
+            f"{components}"
             "Generate a premium, modern website-builder-quality result. It must feel intentionally designed, not like a basic HTML sample.\n"
             "Requirements:\n"
             "- Use a distinctive hero with headline, subcopy, primary CTA, secondary CTA or trust cue.\n"
