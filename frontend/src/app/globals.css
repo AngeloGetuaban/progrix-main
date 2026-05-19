@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0a0a0f;
+  --foreground: #f0f0ff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0a0a0f; }
+::-webkit-scrollbar-thumb { background: #2a2a3f; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a5f; }
+
+/* Gradient text utility */
+.gradient-text {
+  background: linear-gradient(135deg, #818cf8 0%, #a78bfa 50%, #38bdf8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glass card */
+.glass {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+/* Glow effects */
+.glow-purple { box-shadow: 0 0 40px rgba(129, 140, 248, 0.15); }
+.glow-blue   { box-shadow: 0 0 40px rgba(56, 189, 248, 0.15); }
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.animate-fade-in   { animation: fadeIn 0.3s ease forwards; }
+.animate-pulse-slow { animation: pulse-slow 2s ease-in-out infinite; }
+
+/* Code block */
+.code-block {
+  background: #0d0d1a;
+  border: 1px solid #1e1e3a;
+  border-radius: 8px;
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 13px;
+  overflow-x: auto;
+}
