@@ -49,7 +49,7 @@ exports.generateWebsite = async (req, res) => {
       const aiRes = await axios.post(
         `${AI_URL}/${aiPath}?stream=true`,
         aiPayload,
-        { responseType: "stream" }
+        { responseType: "stream", timeout: 0, maxBodyLength: Infinity, maxContentLength: Infinity }
       );
 
       let fullContent = "";
@@ -153,7 +153,7 @@ exports.editWebsite = async (req, res) => {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
 
-      const aiRes = await axios.post(`${AI_URL}/edit`, payload, { responseType: "stream" });
+      const aiRes = await axios.post(`${AI_URL}/edit`, payload, { responseType: "stream", timeout: 0, maxBodyLength: Infinity, maxContentLength: Infinity });
       let fullContent = "";
       let modelUsed = null;
       let provider = null;
